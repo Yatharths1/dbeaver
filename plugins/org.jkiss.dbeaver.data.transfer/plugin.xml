@@ -159,6 +159,19 @@
                 </propertyGroup>
             </processor>
             <processor
+                    id="stream.geojson"
+                    class="org.jkiss.dbeaver.tools.transfer.stream.exporter.DataExporterGeoJSON"
+                    description="Exports data in GeoJSON format"
+                    icon="icons/formats/geojson.png"
+                    label="GeoJSON"
+                    contentType="application/geo+json">
+                <propertyGroup label="GeoJSON Export Options">
+                    <property id="latitudeColumn" type="string" defaultValue="latitude" visible="false"/>
+                    <property id="longitudeColumn" type="string" defaultValue="longitude" visible="false"/>
+                    <property id="extension" type="string" defaultValue="geojson" visible="false"/>
+                </propertyGroup>
+            </processor>
+            <processor
                     id="stream.markdown.table"
                     class="org.jkiss.dbeaver.tools.transfer.stream.exporter.DataExporterMarkdownTable"
                     description="%dataTransfer.processor.markdownTable.description"
