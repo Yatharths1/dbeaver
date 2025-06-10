@@ -2,15 +2,12 @@ package org.jkiss.dbeaver.tools.transfer.stream.exporter;
 
 import org.jkiss.code.NotNull;
 import org.jkiss.dbeaver.DBException;
-import org.jkiss.dbeaver.model.DBUtils;
 import org.jkiss.dbeaver.model.data.DBDAttributeBinding;
 import org.jkiss.dbeaver.model.exec.DBCResultSet;
 import org.jkiss.dbeaver.model.exec.DBCSession;
 import org.jkiss.dbeaver.model.runtime.DBRProgressMonitor;
 import org.jkiss.dbeaver.tools.transfer.stream.IDocumentDataExporter;
 import org.jkiss.dbeaver.tools.transfer.stream.IStreamDataExporterSite;
-import org.jkiss.dbeaver.utils.ContentUtils;
-import org.jkiss.dbeaver.utils.MimeTypes;
 import org.jkiss.utils.CommonUtils;
 
 import java.io.IOException;
@@ -23,6 +20,7 @@ public class DataExporterGeoJSON extends StreamExporterAbstract implements IDocu
     private int rowNum = 0;
     private int latitudeIndex = -1;
     private int longitudeIndex = -1;
+    private int wkbIndex = -1;
 
     @Override
     public void init(IStreamDataExporterSite site) throws DBException {
@@ -44,11 +42,13 @@ public class DataExporterGeoJSON extends StreamExporterAbstract implements IDocu
                 latitudeIndex = i;
             } else if (name.contains("lon") || name.contains("lng")) {
                 longitudeIndex = i;
+            } else if (name.equals("wkb_geometry")) {
+                wkbIndex = i;
             }
         }
 
-        if (latitudeIndex == -1 || longitudeIndex == -1) {
-            throw new DBException("Latitude and Longitude columns not found.");
+        if (latitudeIndex == -1 || longitudeIndex == -1 || wkbIndex == -1) {
+            throw new DBException("Required columns (Latitude, Longitude, wkb_geometry) not found.");
         }
 
         PrintWriter out = getWriter();
@@ -67,19 +67,26 @@ public class DataExporterGeoJSON extends StreamExporterAbstract implements IDocu
 
         Object lat = row[latitudeIndex];
         Object lon = row[longitudeIndex];
-        if (lat == null || lon == null) return;
+        Object wkbGeometry = row[wkbIndex];
+
+        if (wkbGeometry == null) {
+            throw new DBException("wkb_geometry value is null.");
+        }
+
+        String geometryType = detectWKTType(wkbGeometry.toString());
+        String geometryCoordinates = parseWKTGeometry(wkbGeometry.toString());
 
         out.write("    {\n");
         out.write("      \"type\": \"Feature\",\n");
         out.write("      \"geometry\": {\n");
-        out.write("        \"type\": \"Point\",\n");
-        out.write("        \"coordinates\": [" + lon + ", " + lat + "]\n");
+        out.write("        \"type\": \"" + geometryType + "\",\n");
+        out.write("        \"coordinates\": " + geometryCoordinates + "\n");
         out.write("      },\n");
         out.write("      \"properties\": {\n");
 
         boolean firstProp = true;
         for (int i = 0; i < columns.length; i++) {
-            if (i == latitudeIndex || i == longitudeIndex) continue;
+            if (i == wkbIndex) continue;
 
             if (!firstProp) {
                 out.write(",\n");
@@ -88,8 +95,15 @@ public class DataExporterGeoJSON extends StreamExporterAbstract implements IDocu
 
             String columnName = columns[i].getName();
             Object cellValue = row[i];
-            out.write("        \"" + columnName + "\": " +
-                (cellValue == null ? "null" : "\"" + escapeJson(cellValue.toString()) + "\""));
+
+            out.write("        \"" + columnName + "\": ");
+            if (cellValue == null) {
+                out.write("null");
+            } else if (CommonUtils.isNumber(cellValue)) {
+                out.write(cellValue.toString());
+            } else {
+                out.write("\"" + escapeJson(cellValue.toString()) + "\"");
+            }
         }
 
         out.write("\n      }\n");
@@ -107,5 +121,97 @@ public class DataExporterGeoJSON extends StreamExporterAbstract implements IDocu
 
     private String escapeJson(String value) {
         return value.replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+    }
+
+    private String detectWKTType(String wkt) {
+        String trimmed = wkt.trim().toUpperCase();
+        if (trimmed.startsWith("MULTIPOLYGON")) return "MultiPolygon";
+        if (trimmed.startsWith("POLYGON")) return "Polygon";
+        return "Geometry";
+    }
+
+    private String parseWKTGeometry(String wkt) {
+        String upper = wkt.trim().toUpperCase();
+        if (upper.startsWith("MULTIPOLYGON")) {
+            return parseWKTMultiPolygon(wkt);
+        } else if (upper.startsWith("POLYGON")) {
+            return parseWKTPolygon(wkt);
+        } else {
+            return "[]";
+        }
+    }
+
+    private String parseWKTPolygon(String wkt) {
+        int start = wkt.indexOf("((");
+        int end = wkt.lastIndexOf("))");
+        if (start == -1 || end == -1 || start >= end) {
+            return "[]";
+        }
+
+        String coordBody = wkt.substring(start + 2, end);
+        String[] rings = coordBody.split("\\)\\s*,\\s*\\(");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+
+        for (int r = 0; r < rings.length; r++) {
+            if (r > 0) sb.append(",");
+
+            sb.append("[");
+            String[] points = rings[r].split(",");
+
+            for (int p = 0; p < points.length; p++) {
+                if (p > 0) sb.append(",");
+                String[] coords = points[p].trim().split("\\s+");
+                if (coords.length == 2) {
+                    sb.append("[").append(coords[0]).append(",").append(coords[1]).append("]");
+                }
+            }
+            sb.append("]");
+        }
+
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private String parseWKTMultiPolygon(String wkt) {
+        int start = wkt.indexOf("(((");
+        int end = wkt.lastIndexOf(")))");
+        if (start == -1 || end == -1 || start >= end) {
+            return "[]";
+        }
+
+        String content = wkt.substring(start + 3, end);
+        String[] polygons = content.split("\\)\\s*\\)\\s*,\\s*\\(\\(");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+
+        for (int i = 0; i < polygons.length; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("[");
+
+            String[] rings = polygons[i].split("\\)\\s*,\\s*\\(");
+            for (int j = 0; j < rings.length; j++) {
+                if (j > 0) sb.append(",");
+                sb.append("[");
+
+                String[] points = rings[j].split(",");
+                for (int k = 0; k < points.length; k++) {
+                    if (k > 0) sb.append(",");
+                    String[] coords = points[k].trim().split("\\s+");
+                    if (coords.length == 2) {
+                        sb.append("[").append(coords[0]).append(",").append(coords[1]).append("]");
+                    }
+                }
+
+                sb.append("]");
+            }
+
+            sb.append("]");
+        }
+
+        sb.append("]");
+        return sb.toString();
     }
 }

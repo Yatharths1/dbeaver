@@ -166,8 +166,7 @@
                     label="GeoJSON"
                     contentType="application/geo+json">
                 <propertyGroup label="GeoJSON Export Options">
-                    <property id="latitudeColumn" type="string" defaultValue="latitude" visible="false"/>
-                    <property id="longitudeColumn" type="string" defaultValue="longitude" visible="false"/>
+                    <property id="geometryColumn" type="string" defaultValue="wkb_geometry" visible="false"/>
                     <property id="extension" type="string" defaultValue="geojson" visible="false"/>
                 </propertyGroup>
             </processor>
